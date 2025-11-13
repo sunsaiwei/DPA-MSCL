@@ -7,3 +7,13 @@ Because the Daqing Oilfield dataset is a private dataset, it was not uploaded, b
   <img src="datasave/img/pre_lith_well1.png" width="610" />
   <img src="datasave/img/pre_lith_well2.png" width="610" />
 </div>
+## The operating environment of the project
+-	Python == 3.11.4
+- conda == 24.9.2
+-	pandas == 2.0.3
+-	numpy == 1.23.5
+-	matplotlib == 3.7.1
+-	seaborn == 0.13.2
+-	scikit-learn == 1.5.0
+- pickleshare == 0.7.5
+***
