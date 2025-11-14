@@ -18,3 +18,6 @@ Because the Daqing Oilfield dataset is a private dataset, it was not uploaded, b
 -	scikit-learn == 1.5.0
 - pickleshare == 0.7.5
 
+## How to use this project？
+The root directory contains scripts for comparative experiments and ablation experiments of the model on various datasets.
+
