@@ -28,9 +28,7 @@ from sklearn.preprocessing import StandardScaler
 from matplotlib.colors import ListedColormap
 
 def parse_arguments():
-    """
-    解析命令行参数，主要用于设置超参数。
-    """
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='hp',
                         help='Dataset to use: Hugoton_Panoma or blind_HP or daqing or blind_daqing.')
@@ -69,7 +67,6 @@ def parse_arguments():
     parser.add_argument('--test_size', type=float, default=0.2,
                         help='Test size for Dataset split.')
 
-    # 添加warm-up相关参数
     parser.add_argument('--warm_epochs', type=int, default=5,
                         help='Number of warm-up epochs')
     parser.add_argument('--warmup_from', type=float, default=0.001,
@@ -101,7 +98,6 @@ def parse_arguments():
 args = parse_arguments()
 
 def main():
-    # 设置随机种子
     seed = args.seed
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -121,229 +117,176 @@ def main():
 
 
 
-    """
-    监督对比学习阶段
-    """
-    # 设置训练加载器
+
     train_loader = data_train_loader
-    # 初始化模型
     supcon_model = BCLModel(args.features, args.num_classes)
-    # 评估supcon_model参数量
     total_params = sum(p.numel() for p in supcon_model.parameters())
     trainable_params = sum(p.numel() for p in supcon_model.parameters() if p.requires_grad)
     print(f"SupCon Model - Total params: {total_params}, Trainable params: {trainable_params}")
-    # 设置设备（GPU或CPU）
     device = torch.device("cuda:0" if args.cuda else "cpu")
     supcon_model.to(device)
 
-    # 初始化优化器
     optimizer = optim.Adam(supcon_model.parameters(), lr=args.warmup_from)
-    # 初始化学习率调度器
     # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-    # 初始化对比损失函数
     criterion_scl = BalSCL(cls_num_list, args.temp).to(device)
-    criterion_ce = LogitAdjust(cls_num_list).to(device)  # 对数调整交叉熵
+    criterion_ce = LogitAdjust(cls_num_list).to(device)
 
-    # 创建SummaryWriter对象，指定日志保存目录
     tb_path = save_path + 'tensorboard/DPA_BCL'
     writer = SummaryWriter(log_dir=tb_path)
 
-    # 训练对比学习模型
     for epoch in range(1, args.epochs1 + 1):
-        # 应用warm-up学习率
         optimizer = warmup_lr_scheduler(args, optimizer, epoch)
         # train for one epoch
         time1 = time.time()
         loss = BCL_train(train_loader, supcon_model, criterion_ce, criterion_scl, optimizer, args, epoch)
         time2 = time.time()
-        # 在tensorboard中记录学习率变化
         writer.add_scalar('LR', optimizer.param_groups[0]['lr'], epoch)
-        # 记录训练损失
         writer.add_scalar('Loss/train', loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
-    # 关闭写入器
     writer.close()
-    # 评估内存占用
-    if torch.cuda.is_available():
-        print(f"SupCon模型显存占用量量: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        utilization = get_gpu_memory_utilization_rate()
-        print(f"SupCon模型显存占用率: {utilization:.2f}%")
 
-    # """
-    # 对比学习后的特征表示进行t-SNE降维可视化
-    # """
-    #
-    # # 保持数据预处理流程相同（用于保证对比公平性）
-    # train_loader.dataset.transform = None  # 关闭数据增强
-    # model = supcon_model.eval()
-    #
-    # # 特征提取函数（需适配监督对比模型）
-    # def extract_features(model, loader):
-    #     features, labels = [], []
-    #     device = next(model.parameters()).device  # 自动获取模型所在设备
-    #     with torch.no_grad():
-    #         for inputs, targets in loader:
-    #             # 处理多视图输入
-    #             processed_inputs = [
-    #                 inputs[0].to(device),  # 第一个视图（张量）
-    #                 [x.to(device) for x in inputs[1]],  # 第二个视图（列表中的张量）
-    #                 [x.to(device) for x in inputs[2]]  # 第三个视图（列表中的张量）
-    #             ]
-    #             targets = targets.to(device)
-    #
-    #             feat, _, _ = model(processed_inputs)  # 使用处理后的输入
-    #             features.append(feat.cpu())
-    #             labels.append(targets.cpu())
-    #     return torch.cat(features), torch.cat(labels)
-    #
-    # # 提取对比学习后的特征
-    # new_features, new_labels = extract_features(model, train_loader)
-    #
-    # # 替换原有特征处理流程（保持后续代码完全一致）
-    # # 在标准化前手动压平批次维度（同时保持特征维度）
-    # features_2d = new_features.view(-1, new_features.shape[-1])  # 自动推导样本总量
-    # features_Hugoton_Panoma = StandardScaler().fit_transform(features_2d.numpy())
-    #
-    # labels_Hugoton_Panoma = np.repeat(new_labels.numpy().astype(int), 2, axis=0)
-    #
-    # # 调整后的岩性配色方案（色盲友好+连续渐变色）
-    # lithology_info = {
-    #     0: ('SS', '#4E79A7', 'Gravelly Sandstone'),  # 深蓝
-    #     1: ('CSiS', '#A0CBE8', 'Coarse Siltstone'),  # 浅蓝
-    #     2: ('FSiS', '#F28E2B', 'Fine-grained Sandstone'),  # 橙黄
-    #     3: ('SiSH', '#E15759', 'Siliceous Shale'),  # 红
-    #     4: ('MS', '#76B7B2', 'Marl stone'),  # 青绿
-    #     5: ('WS', '#59A14F', 'Wacke stone'),  # 绿
-    #     6: ('D', '#EDC948', 'Dolo stone'),  # 金
-    #     7: ('PS', '#B07AA1', 'Pack stone'),  # 紫
-    #     8: ('BS', '#FF9DA7', 'Bound stone')  # 浅粉
-    # }
-    #
-    # # ===== 新增类间距计算模块 ===== #
-    # # 计算类中心
-    # unique_labels = np.unique(labels_Hugoton_Panoma)
-    # class_centers = {}
-    # for label in unique_labels:
-    #     mask = labels_Hugoton_Panoma == label
-    #     class_centers[label] = features_Hugoton_Panoma[mask].mean(axis=0)
-    #
-    # # 构建距离矩阵
-    # distance_matrix = np.zeros((len(unique_labels), len(unique_labels)))
-    # for i in unique_labels:
-    #     for j in unique_labels:
-    #         distance_matrix[i, j] = np.linalg.norm(class_centers[i] - class_centers[j])
-    #
-    # # 统计分析
-    # triu_indices = np.triu_indices_from(distance_matrix, k=1)
-    # print(f"[类间距离分析]\n"
-    #       f"平均距离: {distance_matrix[triu_indices].mean():.4f}\n"
-    #       f"最小距离: {distance_matrix[triu_indices].min():.4f}\n"
-    #       f"最大距离: {distance_matrix[triu_indices].max():.4f}\n")
-    #
-    # # 可选：可视化距离热力图
-    # plt.figure(figsize=(10, 8))
-    # sns.heatmap(distance_matrix,
-    #             annot=True,
-    #             fmt=".2f",
-    #             cmap="Blues",
-    #             xticklabels=lithology_info.keys(),
-    #             yticklabels=lithology_info.keys())
-    # plt.show()
-    # # ===== 结束新增模块 ===== #
-    #
-    # # 保持原有t-SNE参数和可视化代码完全不变
-    # tsne_Hugoton_Panoma = TSNE(
-    #     n_components=3,
-    #     perplexity=10,
-    #     learning_rate=500,
-    #     random_state=args.seed
-    # )
-    # features_Hugoton_Panoma_3d = tsne_Hugoton_Panoma.fit_transform(features_Hugoton_Panoma)
-    #
-    # # 以下保持原始绘图代码完全一致...
-    #
-    # # 4. 增强可视化
-    # fig = plt.figure(figsize=(9.6, 6.4))
-    # ax = fig.add_subplot(111, projection='3d')
-    #
-    #
-    #
-    # # 保持后续代码完全不变...
-    # # 创建自定义颜色映射
-    # cmap = ListedColormap([v[1] for v in lithology_info.values()])
-    #
-    # # 绘制散点图（参数保持不变）
-    # sc = ax.scatter(
-    #     features_Hugoton_Panoma_3d[:, 0],
-    #     features_Hugoton_Panoma_3d[:, 1],
-    #     features_Hugoton_Panoma_3d[:, 2],
-    #     c=labels_Hugoton_Panoma,
-    #     vmin=0,  # ← 新增这个
-    #     vmax=8,  # ← 新增这个
-    #     cmap=cmap,
-    #     alpha=0.65,  # 降低透明度增强层次感
-    #     s=28,  # 减小点尺寸
-    #     edgecolors='none',
-    #     linewidths=0.3,  # 边框粗细
-    #     depthshade=True  # 保持深度阴影
-    # )
-    #
-    # # 后续所有图例、标签、布局设置保持原样...
-    #
-    # # 单图例系统
-    # # 独立图例框（右上方垂直排列）
-    #
-    # legend_elements = [plt.Line2D([0], [0],
-    #                               marker='o',
-    #                               color='w',
-    #                               label=v[0],
-    #                               markerfacecolor=v[1],
-    #                               markersize=8) for v in lithology_info.values()]
-    #
-    # # 添加图例并设置位置样式
-    # ax.legend(handles=legend_elements,
-    #           loc='upper right',
-    #           bbox_to_anchor=(0.94, 0.9),
-    #           fontsize=10,  # 调小字体
-    #           frameon=True,
-    #           fancybox=True,
-    #           framealpha=0.7,  # 调低框透明度
-    #           borderpad=0.6,
-    #           edgecolor='#404040')  # 添加边框颜色
-    #
-    # plt.tight_layout()
-    # plt.show()
-    #
 
-    """
-    分类训练阶段
-    """
-    # 设置训练次数
+
+    train_loader.dataset.transform = None
+    model = supcon_model.eval()
+
+    def extract_features(model, loader):
+        features, labels = [], []
+        device = next(model.parameters()).device
+        with torch.no_grad():
+            for inputs, targets in loader:
+                processed_inputs = [
+                    inputs[0].to(device),
+                    [x.to(device) for x in inputs[1]],
+                    [x.to(device) for x in inputs[2]]
+                ]
+                targets = targets.to(device)
+
+                feat, _, _ = model(processed_inputs)
+                features.append(feat.cpu())
+                labels.append(targets.cpu())
+        return torch.cat(features), torch.cat(labels)
+
+    new_features, new_labels = extract_features(model, train_loader)
+
+
+    features_2d = new_features.view(-1, new_features.shape[-1])
+    features_Hugoton_Panoma = StandardScaler().fit_transform(features_2d.numpy())
+
+    labels_Hugoton_Panoma = np.repeat(new_labels.numpy().astype(int), 2, axis=0)
+
+
+    lithology_info = {
+        0: ('SS', '#4E79A7', 'Gravelly Sandstone'),
+        1: ('CSiS', '#A0CBE8', 'Coarse Siltstone'),
+        2: ('FSiS', '#F28E2B', 'Fine-grained Sandstone'),
+        3: ('SiSH', '#E15759', 'Siliceous Shale'),
+        4: ('MS', '#76B7B2', 'Marl stone'),
+        5: ('WS', '#59A14F', 'Wacke stone'),
+        6: ('D', '#EDC948', 'Dolo stone'),
+        7: ('PS', '#B07AA1', 'Pack stone'),
+        8: ('BS', '#FF9DA7', 'Bound stone')
+    }
+
+    unique_labels = np.unique(labels_Hugoton_Panoma)
+    class_centers = {}
+    for label in unique_labels:
+        mask = labels_Hugoton_Panoma == label
+        class_centers[label] = features_Hugoton_Panoma[mask].mean(axis=0)
+
+    distance_matrix = np.zeros((len(unique_labels), len(unique_labels)))
+    for i in unique_labels:
+        for j in unique_labels:
+            distance_matrix[i, j] = np.linalg.norm(class_centers[i] - class_centers[j])
+
+    triu_indices = np.triu_indices_from(distance_matrix, k=1)
+    print(f"[类间距离分析]\n"
+          f"平均距离: {distance_matrix[triu_indices].mean():.4f}\n"
+          f"最小距离: {distance_matrix[triu_indices].min():.4f}\n"
+          f"最大距离: {distance_matrix[triu_indices].max():.4f}\n")
+
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(distance_matrix,
+                annot=True,
+                fmt=".2f",
+                cmap="Blues",
+                xticklabels=lithology_info.keys(),
+                yticklabels=lithology_info.keys())
+    plt.show()
+
+    tsne_Hugoton_Panoma = TSNE(
+        n_components=3,
+        perplexity=10,
+        learning_rate=500,
+        random_state=args.seed
+    )
+    features_Hugoton_Panoma_3d = tsne_Hugoton_Panoma.fit_transform(features_Hugoton_Panoma)
+
+
+    fig = plt.figure(figsize=(9.6, 6.4))
+    ax = fig.add_subplot(111, projection='3d')
+
+
+
+
+    cmap = ListedColormap([v[1] for v in lithology_info.values()])
+
+
+    sc = ax.scatter(
+        features_Hugoton_Panoma_3d[:, 0],
+        features_Hugoton_Panoma_3d[:, 1],
+        features_Hugoton_Panoma_3d[:, 2],
+        c=labels_Hugoton_Panoma,
+        vmin=0,
+        vmax=8,
+        cmap=cmap,
+        alpha=0.65,
+        s=28,
+        edgecolors='none',
+        linewidths=0.3,
+        depthshade=True
+    )
+
+
+
+    legend_elements = [plt.Line2D([0], [0],
+                                  marker='o',
+                                  color='w',
+                                  label=v[0],
+                                  markerfacecolor=v[1],
+                                  markersize=8) for v in lithology_info.values()]
+
+    ax.legend(handles=legend_elements,
+              loc='upper right',
+              bbox_to_anchor=(0.94, 0.9),
+              fontsize=10,
+              frameon=True,
+              fancybox=True,
+              framealpha=0.7,
+              borderpad=0.6,
+              edgecolor='#404040')
+
+    plt.tight_layout()
+    plt.show()
+
+
+
     times = 1
 
-    # 初始化训练和测试准确率列表
     train_accs = []
     test_accs = []
 
-    # 设置随机种子
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    # 初始化分类器模型
     classifier_model = Classifier(args.num_classes)
-    # 评估classifier_model参数量
     total_params = sum(p.numel() for p in classifier_model.parameters())
     trainable_params = sum(p.numel() for p in classifier_model.parameters() if p.requires_grad)
     print(f"Classifier Model - Total params: {total_params}, Trainable params: {trainable_params}")
-    # 初始化优化器
     optimizer = optim.Adam(classifier_model.parameters(), lr=args.lr)
-    # 初始化学习率调度器
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-    # 初始化交叉熵损失函数
     criterion = nn.CrossEntropyLoss()
-    # 初始化最佳准确率和模型保存路径
     best_accuracy = 0
     best_model_path = save_path + f'{args.dataset}_best.pth'
-    # 设置设备（GPU或CPU）
     device = torch.device("cuda:0" if args.cuda else "cpu")
     classifier_model.to(device)
     # 评估内存占用
@@ -352,41 +295,31 @@ def main():
         utilization = get_gpu_memory_utilization_rate()
         print(f"Classifier模型显存占用率: {utilization:.2f}%")
 
-    # 训练分类器模型
     for epoch in range(1, args.epochs2 + 1):
-        # 训练模型
         train_model(supcon_model.encoder2, supcon_model.encoder3, classifier_model, criterion, optimizer,
                     data_train_loader,
                     device=device)
-        # 计算训练准确率
         train_accuracy, _ = evaluate(supcon_model.encoder2, supcon_model.encoder3, classifier_model, x_train, y_train,
                                      device=device)
-        # 计算测试准确率
         test_accuracy, predicted_test = evaluate(supcon_model.encoder2, supcon_model.encoder3, classifier_model, x_test,
                                                  y_test,
                                                  device=device)
         train_accs.append(train_accuracy)
         test_accs.append(test_accuracy)
-        # 打印训练和测试准确率
         print(
             f'Epoch: {epoch}/{args.epochs2}, Train Accuracy: {train_accuracy:.4f}, Test Accuracy: {test_accuracy:.4f}')
 
-        # 如果当前测试准确率高于最佳准确率，保存模型
         if test_accuracy > best_accuracy:
             best_accuracy = test_accuracy
             torch.save(classifier_model.state_dict(), best_model_path)
 
-        # 更新学习率调度器
         scheduler.step()
 
-    # 加载最佳模型进行最终评估
     classifier_model.load_state_dict(torch.load(best_model_path))
     accuracy, predicted = evaluate(supcon_model.encoder2, supcon_model.encoder3, classifier_model, x_test, y_test,
                                    device=device)
 
-    # >>>>>>>>>> 在这里添加推理速度评估代码 <<<<<<<<<<
     print("\n=== 推理速度评估 ===")
-    # 创建示例输入数据
     sample_batch = next(iter(data_train_loader))
     processed_sample = [
         sample_batch[0][0].to(device),
@@ -400,32 +333,26 @@ def main():
     print(f"平均推理时间: {avg_time * 1000:.2f} ms")
     print(f"时间标准差: {std_time * 1000:.2f} ms")
     print(f"吞吐量: {throughput:.2f} 样本/秒")
-    # >>>>>>>>>> 推理速度评估代码结束 <<<<<<<<<<
 
-    # 保存预测结果到文件
     path = save_path + 'y_pre/DPA_BCL.txt'
     write_file(path, predicted)
 
-    # 计算精确率、召回率和F1分数
     precision = precision_score(y_test.cpu(), predicted.cpu(), average='macro')
     recall = recall_score(y_test.cpu(), predicted.cpu(), average='macro')
     f1 = f1_score(y_test.cpu(), predicted.cpu(), average='macro')
     conf_matrix = get_confusion_matrix(y_test.cpu(), predicted.cpu())
 
-    # 可视化评估结果
     eval_save_path = save_path + f'model_evaluation/'
     save_metrics_plot(args, accuracy, precision, recall, f1, eval_save_path, "DPA_BCL")
 
-    # 可视化混淆矩阵
     plt.figure(figsize=(10, 7))
 
-    # 假设你有一个岩性名称列表，例如：
-    lithology_labels = ['SS', 'CSiS', 'FSiS', 'SiSh', 'MS', 'WS', 'D', 'PS', 'BS']  # 替换为你的实际岩性名称
+    lithology_labels = ['SS', 'CSiS', 'FSiS', 'SiSh', 'MS', 'WS', 'D', 'PS', 'BS']
 
     sns.heatmap(
         conf_matrix,
         annot=True,
-        fmt='.2f',  # 显示两位小数
+        fmt='.2f',
         cmap='Blues',
         xticklabels=lithology_labels,
         yticklabels=lithology_labels
@@ -437,7 +364,6 @@ def main():
     plt.savefig(confusion_matrix_save_path + f'DPA_BCL.png')
     plt.show()
 
-    # 可视化训练和测试准确率
     plt.figure(figsize=(10, 7))
     plt.plot(train_accs, label='Train Accuracy')
     plt.plot(test_accs, label='Test Accuracy')
@@ -449,35 +375,26 @@ def main():
     plt.savefig(accuracy_curve_save_path + f'DPA_BCL.png')
     plt.show()
 
-# 获取GPU内存占用率百分比
 def get_gpu_memory_utilization_rate():
-    """获取GPU内存占用率百分比"""
     if torch.cuda.is_available():
-        # 已使用内存
         used_memory = torch.cuda.memory_allocated()
-        # 总内存
         total_memory = torch.cuda.get_device_properties(0).total_memory
-        # 计算占用率百分比
         utilization_rate = (used_memory / total_memory) * 100
         return utilization_rate
     return 0
 
 
-# 在最终评估部分添加推理速度测试
 def benchmark_inference_speed(model, sample_input, device, num_runs=100):
-    """基准测试模型推理速度"""
     model = model.to(device)
     sample_input = [x.to(device) if isinstance(x, torch.Tensor) else
                     [y.to(device) for y in x] for x in sample_input]
 
     model.eval()
 
-    # 预热
     with torch.no_grad():
         for _ in range(10):
             _ = model(sample_input)
 
-    # 测量
     times = []
     with torch.no_grad():
         for _ in range(num_runs):
@@ -488,10 +405,10 @@ def benchmark_inference_speed(model, sample_input, device, num_runs=100):
 
     avg_time = np.mean(times)
     std_time = np.std(times)
-    throughput = 1.0 / avg_time  # 样本/秒
+    throughput = 1.0 / avg_time
 
     return avg_time, std_time, throughput
 
-# 如果当前脚本是主程序，运行main函数
+
 if __name__ == '__main__':
     main()

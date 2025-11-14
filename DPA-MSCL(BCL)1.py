@@ -209,7 +209,7 @@ def main():
     plt.savefig(confusion_matrix_save_path + f'DPA-BLC(BCL).png')
     plt.show()
 
-    # 可视化训练和测试准确率
+
     plt.figure(figsize=(10, 7))
     plt.plot(train_accs, label='Train Accuracy')
     plt.plot(test_accs, label='Test Accuracy')

@@ -135,9 +135,7 @@ def main():
 
 
 
-    """
-    分类训练阶段
-    """
+
     times = 1
 
     train_accs = []
